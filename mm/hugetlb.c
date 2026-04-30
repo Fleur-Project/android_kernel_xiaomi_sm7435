@@ -3868,7 +3868,7 @@ int copy_hugetlb_page_range(struct mm_struct *dst, struct mm_struct *src,
 
 #ifdef CONFIG_ARCH_WANT_HUGE_PMD_SHARE
 		/* If the pagetables are shared, there is nothing to do */
-		if (hugetlb_pmd_shared(dst_pte))
+		if (page_count(virt_to_page(dst_pte)) > 1)
 			continue;
 #endif
 
@@ -5500,16 +5500,13 @@ int huge_pmd_unshare(struct mmu_gather *tlb, struct vm_area_struct *vma,
 	i_mmap_assert_write_locked(vma->vm_file->f_mapping);
 	if (sz != PMD_SIZE)
 		return 0;
-	BUG_ON(page_count(ptpage) == 0);
-	if (!hugetlb_pmd_shared(ptep))
+	BUG_ON(page_count(virt_to_page(ptep)) == 0);
+	if (page_count(virt_to_page(ptep)) == 1)
 		return 0;
 
 	pud_clear(pud);
-	tlb_flush_pmd_range(tlb, *addr & PUD_MASK, PUD_SIZE);
-	tlb->unshared_tables = true;
-	if (fully_unshared)
-		tlb->fully_unshared_tables = true;
-	put_page(ptpage);
+	tlb_unshare_pmd_ptdesc(tlb, virt_to_page(ptep), *addr);
+
 	mm_dec_nr_pmds(mm);
 	/*
 	 * This update of passed address optimizes loops sequentially
@@ -5545,11 +5542,6 @@ void huge_pmd_unshare_flush(struct mmu_gather *tlb, struct vm_area_struct *vma)
 	if (tlb->unshared_tables)
 		tlb_flush_mmu_tlbonly(tlb);
 
-	if (tlb->fully_unshared_tables) {
-		tlb_remove_table_sync_one();
-		tlb->fully_unshared_tables = false;
-	}
-}
 #else /* !CONFIG_ARCH_WANT_HUGE_PMD_SHARE */
 pte_t *huge_pmd_share(struct mm_struct *mm, struct vm_area_struct *vma,
 		      unsigned long addr, pud_t *pud)

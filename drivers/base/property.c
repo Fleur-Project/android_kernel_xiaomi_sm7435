@@ -721,13 +721,13 @@ bool fwnode_is_ancestor_of(struct fwnode_handle *test_ancestor,
 		return false;
 
 	fwnode_handle_get(test_child);
-	do {
+	while (test_child) {
 		if (test_child == test_ancestor) {
 			fwnode_handle_put(test_child);
 			return true;
 		}
 		test_child = fwnode_get_next_parent(test_child);
-	} while (test_child);
+	}
 	return false;
 }
 
