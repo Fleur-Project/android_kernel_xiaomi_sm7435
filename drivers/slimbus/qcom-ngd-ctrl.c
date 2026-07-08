@@ -2061,7 +2061,8 @@ static int qcom_slim_ngd_ctrl_probe(struct platform_device *pdev)
 	}
 
 	ret = devm_request_irq(dev, ctrl->irq, qcom_slim_ngd_interrupt,
-			       IRQF_TRIGGER_HIGH, "slim-ngd", ctrl);
+			       IRQF_TRIGGER_HIGH | IRQF_NO_AUTOEN,
+			       "slim-ngd", ctrl);
 	if (ret) {
 		dev_err(&pdev->dev, "request IRQ failed\n");
 		return ret;
@@ -2106,14 +2107,6 @@ static int qcom_slim_ngd_ctrl_probe(struct platform_device *pdev)
 		ctrl->sysfs_created = true;
 	}
 
-	ctrl->nb.notifier_call = qcom_slim_ngd_ssr_notify;
-	ctrl->notifier = qcom_register_ssr_notifier("lpass", &ctrl->nb);
-	if (IS_ERR(ctrl->notifier)) {
-		ret = PTR_ERR(ctrl->notifier);
-		dev_err(dev, "Failed to register SSR notification: %d\n", ret);
-		goto remove_ipc_sysfs;
-	}
-
 	ctrl->dev = dev;
 	ctrl->framer.rootfreq = SLIM_ROOT_FREQ >> 3;
 	ctrl->framer.superfreq =
@@ -2144,14 +2137,7 @@ static int qcom_slim_ngd_ctrl_probe(struct platform_device *pdev)
 	if (IS_ERR(ctrl->pdr)) {
 		ret = PTR_ERR(ctrl->pdr);
 		dev_err(dev, "Failed to init PDR handle: %d\n", ret);
-		goto err_out;
-	}
-
-	pds = pdr_add_lookup(ctrl->pdr, "avs/audio", "msm/adsp/audio_pd");
-	if (IS_ERR(pds) && PTR_ERR(pds) != -EALREADY) {
-		ret = PTR_ERR(pds);
-		dev_err(dev, "pdr add lookup failed: %d\n", ret);
-		goto pdr_release;
+		goto remove_ipc_sysfs;
 	}
 
 	ret = of_qcom_slim_ngd_register(dev, ctrl);
@@ -2160,15 +2146,34 @@ static int qcom_slim_ngd_ctrl_probe(struct platform_device *pdev)
 		goto pdr_release;
 	}
 
+	pds = pdr_add_lookup(ctrl->pdr, "avs/audio", "msm/adsp/audio_pd");
+	if (IS_ERR(pds) && PTR_ERR(pds) != -EALREADY) {
+		ret = PTR_ERR(pds);
+		dev_err(dev, "pdr add lookup failed: %d\n", ret);
+		goto err_unregister_ngd;
+	}
+
+	ctrl->nb.notifier_call = qcom_slim_ngd_ssr_notify;
+	ctrl->notifier = qcom_register_ssr_notifier("lpass", &ctrl->nb);
+	if (IS_ERR(ctrl->notifier)) {
+		ret = PTR_ERR(ctrl->notifier);
+		dev_err(dev, "Failed to register SSR notification: %d\n", ret);
+		goto err_unregister_ngd;
+	}
+
 	platform_driver_register(&qcom_slim_ngd_driver);
+	enable_irq(ctrl->irq);
 	SLIM_INFO(ctrl, "NGD SB controller is up!\n");
 	return 0;
 
+err_unregister_ngd:
+	if (ctrl->ngd) {
+		if (ctrl->ngd->pdev)
+			platform_device_unregister(ctrl->ngd->pdev);
+		kfree(ctrl->ngd);
+	}
 pdr_release:
 	pdr_handle_release(ctrl->pdr);
-err_out:
-	qcom_unregister_ssr_notifier(ctrl->notifier, &ctrl->nb);
-
 remove_ipc_sysfs:
 	if (ctrl->ipc_slimbus_log)
 		ipc_log_context_destroy(ctrl->ipc_slimbus_log);
